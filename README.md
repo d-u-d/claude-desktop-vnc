@@ -1,123 +1,126 @@
-**Русский** · [English](README.en.md)
+[Русский](README.ru.md) · **English**
 
 # WinVNC
 
-Резидентное приложение в строке меню macOS, которое транслирует окно
-**Claude Desktop** по протоколу VNC (RFB) — например, на iPad.
+A macOS menu bar app that streams the **Claude Desktop** window over VNC (RFB) —
+to an iPad, for example.
 
-Смысл в том, чтобы работать с Claude Desktop с планшета, не занимая экран Мака:
-на время сессии поднимается виртуальный HiDPI-дисплей, окно уезжает туда, а
-после отключения возвращается на место, и виртуальный дисплей гаснет.
+The point is to work with Claude Desktop from a tablet without occupying the
+Mac's screen: for the duration of a session it brings up a virtual HiDPI
+display, moves the window there, and when the client disconnects it puts the
+window back and shuts the virtual display down.
 
-> ⚠️ **Без аутентификации.** Сервер принимает RFB-подключения с типом
-> безопасности `None` и слушает `0.0.0.0`. Любой, кто дотянется до порта 5901,
-> получит полное управление окном и клавиатурой. Приложение рассчитано на
-> работу **только внутри доверенной сети** — например, через WireGuard. Не
-> выставляйте порт в интернет.
+> ⚠️ **No authentication.** The server accepts RFB connections with security
+> type `None` and listens on `0.0.0.0`. Anyone who can reach port 5901 gets
+> full control of the window and keyboard. This is meant to run **inside a
+> trusted network only** — over WireGuard, for instance. Do not expose the port
+> to the internet.
 
-## Как это устроено
+## How it works
 
-| Файл | Отвечает за |
+| File | Responsibility |
 | --- | --- |
-| [`main.swift`](Sources/main.swift) | Иконка в строке меню, жизненный цикл сессий, сторож |
-| [`RFBServer.swift`](Sources/RFBServer.swift) | Протокол RFB 3.8: рукопожатие, кадры, ввод |
-| [`Framebuffer.swift`](Sources/Framebuffer.swift) | Захват картинки через ScreenCaptureKit |
-| [`VirtualDisplay.swift`](Sources/VirtualDisplay.swift) | Виртуальный дисплей через `betterdisplaycli` |
-| [`WindowResizer.swift`](Sources/WindowResizer.swift) | Перенос окна на виртуалку и возврат обратно (Accessibility) |
-| [`Input.swift`](Sources/Input.swift), [`Keymap.swift`](Sources/Keymap.swift) | Проброс мыши и клавиатуры через `CGEvent` |
-| [`PixelFormat.swift`](Sources/PixelFormat.swift), [`Deflater.swift`](Sources/Deflater.swift) | Формат пикселей и zlib-кодирование кадров |
-| [`Log.swift`](Sources/Log.swift) | Диагностика в `/tmp/winvnc.log` |
+| [`main.swift`](Sources/main.swift) | Menu bar item, session lifecycle, watchdog |
+| [`RFBServer.swift`](Sources/RFBServer.swift) | RFB 3.8: handshake, frames, input |
+| [`Framebuffer.swift`](Sources/Framebuffer.swift) | Screen capture via ScreenCaptureKit |
+| [`VirtualDisplay.swift`](Sources/VirtualDisplay.swift) | Virtual display via `betterdisplaycli` |
+| [`WindowResizer.swift`](Sources/WindowResizer.swift) | Moving the window to the virtual display and back (Accessibility) |
+| [`Input.swift`](Sources/Input.swift), [`Keymap.swift`](Sources/Keymap.swift) | Mouse and keyboard injection via `CGEvent` |
+| [`PixelFormat.swift`](Sources/PixelFormat.swift), [`Deflater.swift`](Sources/Deflater.swift) | Pixel format conversion and zlib frame encoding |
+| [`Log.swift`](Sources/Log.swift) | Diagnostics in `/tmp/winvnc.log` |
 
-Работа с одним клиентом разнесена на два потока: читатель обрабатывает мышь и
-клавиатуру немедленно, отправитель отдельно захватывает и шлёт кадры. Иначе
-события ввода стоят в очереди за видео, и мышь ощутимо запаздывает.
+Each client is served by two threads: the reader handles mouse and keyboard
+immediately, while a separate sender captures and ships frames. Otherwise input
+events queue up behind video and the pointer lags badly.
 
-Захватывается **весь виртуальный дисплей**, а не окно. У дисплея геометрия за
-сессию не меняется, поэтому координаты мыши сходятся точно; окно же меняет
-размер прямо во время работы, и координаты из-за этого разъезжались.
+The capture target is the **entire virtual display**, not the window. A
+display's geometry stays fixed for the whole session, so pointer coordinates map
+exactly; a window, by contrast, changes size while you work, which is what made
+the coordinates drift.
 
-## Требования
+## Requirements
 
-- macOS с Apple Silicon (проверялось на macOS 15, Mac mini).
-- [BetterDisplay](https://github.com/waydabber/BetterDisplay) с виртуальным
-  экраном по имени `iPadVNC` и CLI: `brew install waydabber/betterdisplay/betterdisplaycli`.
-  В списке разрешений экрана должны быть `1152x864` и `2304x1728` (HiDPI 2×).
-- Xcode Command Line Tools (нужен `swiftc`).
-- Разрешения в «Системных настройках → Конфиденциальность»: **Универсальный
-  доступ** (для ввода) и **Запись экрана** (для захвата).
+- macOS on Apple Silicon (tested on macOS 15, Mac mini).
+- [BetterDisplay](https://github.com/waydabber/BetterDisplay) with a virtual
+  screen named `iPadVNC`, plus the CLI:
+  `brew install waydabber/betterdisplay/betterdisplaycli`.
+  Its resolution list must include `1152x864` and `2304x1728` (HiDPI 2×).
+- Xcode Command Line Tools (for `swiftc`).
+- Permissions under System Settings → Privacy & Security: **Accessibility**
+  (for input) and **Screen Recording** (for capture).
 
-## Сборка и запуск
+## Build and run
 
 ```bash
 bash build.sh
 open WinVNC.app
 ```
 
-Приложение появится иконкой дисплея в строке меню, статус и число клиентов
-видны в его меню. Подключаться любым VNC-клиентом на порт `5901`
-(проверено с [Jump Desktop](https://jumpdesktop.com/) на iPad).
+The app shows up as a display icon in the menu bar; status and client count are
+in its menu. Connect with any VNC client on port `5901` (verified with
+[Jump Desktop](https://jumpdesktop.com/) on iPad).
 
-Настройки задаются константами в исходниках: имя целевого приложения и порт —
-в [`main.swift`](Sources/main.swift), имя и размер виртуального экрана — в
+Settings live as constants in the sources: target app name and port in
+[`main.swift`](Sources/main.swift), virtual screen name and size in
 [`VirtualDisplay.swift`](Sources/VirtualDisplay.swift).
 
-## Диагностика
+## Diagnostics
 
-- `/tmp/winvnc.log` — события сессий и ошибки. При старте, если файл перевалил
-  за 256 КБ, он уезжает в `winvnc.log.prev`.
-- `/tmp/winvnc.crash` — фатальные сигналы, если приложение всё-таки упало.
+- `/tmp/winvnc.log` — session events and errors. On startup, if the file grew
+  past 256 KB it is rotated to `winvnc.log.prev`.
+- `/tmp/winvnc.crash` — fatal signals, in case the app does die.
 
-Лог намеренно скупой: подключения, подъём и гашение виртуального дисплея,
-подгонка окна, причина обрыва связи (клиент закрылся сам, пропал молча по
-таймауту или код ошибки сокета) и все ошибки.
+The log is deliberately sparse: connections, virtual display up and down, window
+fitting, the reason a connection ended (client closed it, vanished silently on
+timeout, or a socket error code) and every error.
 
-## Грабли, на которые уже наступили
+## Rakes already stepped on
 
-Эти решения выглядят избыточными, пока не знаешь их истории — не убирайте их
-бездумно:
+These decisions look redundant until you know their history — don't remove them
+casually:
 
-- **`SIGPIPE`.** Запись в сокет, который клиент уже закрыл, по умолчанию
-  мгновенно убивает процесс. Приложение умирало при каждом отключении планшета
-  без единой записи в лог и без уборки — виртуальный дисплей оставался висеть.
-  Лечится `signal(SIGPIPE, SIG_IGN)` и `SO_NOSIGPIPE` на сокете.
-- **Виртуальный дисплей опознаётся по `displayID`** из
-  `betterdisplaycli get --identifiers`, а не по совпадению размера. Проверка по
-  размеру врала, и гашение рапортовало об успехе, ничего не погасив.
-- **Размер прямоугольника не должен превышать буфер клиента.** Иначе клиент
-  растягивает кадр, и ошибка позиционирования мыши растёт слева направо.
-  Сервер либо шлёт `DesktopSize`, либо кадрирует, но никогда не масштабирует.
-- **AX-размер окна читается не сразу.** Замер сразу после `setSize` отдаёт
-  прежнее значение, поэтому подгонка ширины делается с паузами.
-- **Запрос ширины ровно по ширине экрана** заставляет окно «прищёлкнуться» к
-  большему размеру, и правый край с полосой прокрутки уезжает за границу.
-  Запрашивается на точку меньше.
-- **Таймауты везде**, где поток может залипнуть: на сокете, на захвате кадра,
-  на ожидании потока-отправителя и на вызовах `betterdisplaycli`. Плюс сторож,
-  который раз в 15 секунд возвращает окно и гасит виртуалку, если сессия
-  зависла или клиент пропал.
+- **`SIGPIPE`.** Writing to a socket the client has already closed kills the
+  process instantly by default. The app died on every tablet disconnect with
+  nothing in the log and no cleanup — the virtual display stayed up. Fixed with
+  `signal(SIGPIPE, SIG_IGN)` plus `SO_NOSIGPIPE` on the socket.
+- **The virtual display is identified by `displayID`** from
+  `betterdisplaycli get --identifiers`, not by matching its size. The size check
+  lied, and teardown reported success without shutting anything down.
+- **A rectangle must never exceed the client's framebuffer.** Otherwise the
+  client stretches the frame and pointer error grows from left to right. The
+  server either sends `DesktopSize` or crops, but never scales.
+- **The AX window size does not read back immediately.** Reading right after
+  `setSize` returns the previous value, so width fitting is done with pauses.
+- **Asking for exactly the display width** makes the window snap to a larger
+  size, pushing its right edge — and the scrollbar — off screen. Ask for one
+  point less.
+- **Timeouts everywhere** a thread could get stuck: on the socket, on frame
+  capture, on waiting for the sender thread, and on `betterdisplaycli` calls.
+  Plus a watchdog that every 15 seconds restores the window and shuts the
+  virtual display down if a session hangs or a client disappears.
 
 <a id="donate"></a>
 
-## Поддержать
+## Support
 
-Проект сделан для себя и выложен как есть. Если он вам пригодился и захотелось
-сказать спасибо — **USDT**, на выбор две сети с копеечной комиссией.
+Built for myself and published as is. If you found it useful and feel like
+saying thanks — **USDT**, two networks with negligible fees.
 
-| Сеть **TON** | Сеть **Solana** |
+| **TON** | **Solana** |
 | :---: | :---: |
-| <img src="assets/qr-usdt-ton.png" width="170" alt="QR-код адреса USDT в сети TON"> | <img src="assets/qr-usdt-solana.png" width="170" alt="QR-код адреса USDT в сети Solana"> |
+| <img src="assets/qr-usdt-ton.png" width="170" alt="QR code for the USDT address on TON"> | <img src="assets/qr-usdt-solana.png" width="170" alt="QR code for the USDT address on Solana"> |
 
-Сеть **TON**:
+**TON**:
 
 ```
 UQDPB2vdH0Was8Ei4WWRUf4P15EedeRkSTvp1VeiRxctvbhJ
 ```
 
-Сеть **Solana**:
+**Solana**:
 
 ```
 85a1axcgiYcDDQHuAqUTVSCYdZPgtkUVxdujAyvDrddJ
 ```
 
-> Отправляйте **только USDT и строго в указанной сети** — другая монета или
-> другая сеть, и средства пропадут безвозвратно. Мемо/комментарий не нужен.
+> Send **only USDT and strictly on the network shown** — a different coin or
+> network means the funds are gone for good. No memo or comment needed.
